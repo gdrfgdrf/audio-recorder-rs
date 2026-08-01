@@ -8,7 +8,6 @@ use cpal::{
     traits::{DeviceTrait, StreamTrait},
 };
 use crossbeam_channel::Receiver;
-
 use super::{
     constants::{CLOCK_DELAY, TargetFormat},
     errors::AudioRecorderError,
@@ -67,11 +66,51 @@ macro_rules! build_input_stream_for {
     }};
 }
 
+macro_rules! build_output_stream_for {
+    (
+        $device:expr,            // input  CPAL device
+        $config:expr,            // config
+        $fmt:expr,               // runtime SampleFormat
+        $tx:expr,                // mpsc::Sender<Vec<TargetFormat>>
+        $( $variant:ident => $ty:ty ),+ $(,)?   // mapping table
+    ) => {{
+        match $fmt {
+            $(
+                cpal::SampleFormat::$variant => {
+                    // Each branch has the right slice type automatically.
+                    let tx_clone = $tx.clone();
+                    $device.build_output_stream(
+                        &($config).clone().into(),
+                        move |data: &mut [$ty], _| {
+                            // fast, idiomatic conversion
+                            let parsed: Vec<TargetFormat> =
+                                data.iter().map(|s| s.to_sample::<TargetFormat>()).collect();
+                            if let Err(e) = tx_clone.send(parsed) {
+                                tracing::error!("Failed to send data: {}", e);
+                            }
+                        },
+                        Recorder::err_fn,
+                        None,
+                    )
+                    .map_err(|e| {
+                        tracing::error!("Failed to build output stream: {}", e);
+                        "Failed to build output stream".to_string()
+                    })
+                }
+            )+
+            other => {
+                tracing::error!("Unsupported sample format: {:?}", other);
+                Err("Unsupported sample format".into())
+            }
+        }
+    }};
+}
+
 impl Recorder {
     pub fn record_single_device(
         &mut self,
         device: cpal::Device,
-        is_input: bool
+        is_input: bool,
     ) -> Result<Receiver<Vec<TargetFormat>>, AudioRecorderError> {
         tracing::info!("Record single device started");
 
@@ -79,7 +118,7 @@ impl Recorder {
             "Using input device: {:?}",
             device.name().unwrap_or(String::from("Unknown"))
         );
-        
+
         let config = if is_input {
             match device.default_input_config() {
                 Ok(config) => config,
@@ -118,27 +157,53 @@ impl Recorder {
 
         tracing::debug!("Begin recording...");
         thread::spawn(move || {
-            let stream = match build_input_stream_for!(
-                device,
-                config,
-                config.sample_format(),
-                sync_tx,
-                I8  => i8,
-                I16 => i16,
-                I32 => i32,
-                I64 => i64,
-                U8  => u8,
-                U16 => u16,
-                U32 => u32,
-                U64 => u64,
-                F32 => f32,
-                F64 => f64
-            ) {
-                Ok(s) => s,
-                Err(e) => {
-                    tracing::error!("Failed to build input stream: {}", e);
-                    recording_signal.store(false, std::sync::atomic::Ordering::SeqCst);
-                    return Err("Failed to build input stream".to_string());
+            let stream = if is_input {
+                match build_input_stream_for!(
+                    device,
+                    config,
+                    config.sample_format(),
+                    sync_tx,
+                    I8  => i8,
+                    I16 => i16,
+                    I32 => i32,
+                    I64 => i64,
+                    U8  => u8,
+                    U16 => u16,
+                    U32 => u32,
+                    U64 => u64,
+                    F32 => f32,
+                    F64 => f64
+                ) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        tracing::error!("Failed to build input stream: {}", e);
+                        recording_signal.store(false, std::sync::atomic::Ordering::SeqCst);
+                        return Err("Failed to build input stream".to_string());
+                    }
+                }
+            } else {
+                match build_output_stream_for!(
+                    device,
+                    config,
+                    config.sample_format(),
+                    sync_tx,
+                    I8  => i8,
+                    I16 => i16,
+                    I32 => i32,
+                    I64 => i64,
+                    U8  => u8,
+                    U16 => u16,
+                    U32 => u32,
+                    U64 => u64,
+                    F32 => f32,
+                    F64 => f64
+                ) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        tracing::error!("Failed to build output stream: {}", e);
+                        recording_signal.store(false, std::sync::atomic::Ordering::SeqCst);
+                        return Err("Failed to build output stream".to_string());
+                    }
                 }
             };
 
