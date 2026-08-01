@@ -169,7 +169,7 @@ impl Recorder {
 
         if input_only {
             tracing::info!("Recording from a single device");
-            return self.record_single_device(input_device);
+            return self.record_single_device(input_device, true);
         }
 
         let output_device = match get_default_output_device() {

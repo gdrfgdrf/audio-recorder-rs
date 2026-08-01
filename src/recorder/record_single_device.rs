@@ -71,6 +71,7 @@ impl Recorder {
     pub fn record_single_device(
         &mut self,
         device: cpal::Device,
+        is_input: bool
     ) -> Result<Receiver<Vec<TargetFormat>>, AudioRecorderError> {
         tracing::info!("Record single device started");
 
@@ -78,14 +79,26 @@ impl Recorder {
             "Using input device: {:?}",
             device.name().unwrap_or(String::from("Unknown"))
         );
-
-        let config = match device.default_input_config() {
-            Ok(config) => config,
-            Err(error) => {
-                tracing::error!("Failed to get default input config: {}", error);
-                return Err(AudioRecorderError::DeviceError(
-                    "Failed to get default input config",
-                ));
+        
+        let config = if is_input {
+            match device.default_input_config() {
+                Ok(config) => config,
+                Err(error) => {
+                    tracing::error!("Failed to get default input config: {}", error);
+                    return Err(AudioRecorderError::DeviceError(
+                        "Failed to get default input config",
+                    ));
+                }
+            }
+        } else {
+            match device.default_output_config() {
+                Ok(config) => config,
+                Err(error) => {
+                    tracing::error!("Failed to get default output config: {}", error);
+                    return Err(AudioRecorderError::DeviceError(
+                        "Failed to get default output config",
+                    ));
+                }
             }
         };
 
