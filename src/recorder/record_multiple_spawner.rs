@@ -42,8 +42,8 @@ impl Recorder {
 
         tracing::debug!("Calculating resampling target");
         // calculate the resampling target
-        let input_sample_rate = input_config.sample_rate().0;
-        let output_sample_rate = output_config.sample_rate().0;
+        let input_sample_rate = input_config.sample_rate();
+        let output_sample_rate = output_config.sample_rate();
 
         let (resampler_target, target_rate, origin_rate) =
             match input_sample_rate.cmp(&output_sample_rate) {

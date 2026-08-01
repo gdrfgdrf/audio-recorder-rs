@@ -21,15 +21,12 @@ pub fn get_default_input_device() -> Result<Device, AudioRecorderError> {
 pub fn get_default_output_device() -> Result<Device, AudioRecorderError> {
     #[cfg(target_os = "macos")]
     {
-        tracing::debug!("Using macOS specific host for audio device selection");
-        tracing::debug!("Trying to use ScreenCaptureKit to capture system audio");
-        // ! see https://github.com/RustAudio/cpal/pull/894
-        if let Ok(host) = cpal::host_from_id(cpal::HostId::ScreenCaptureKit) {
+        if let Ok(host) = cpal::host_from_id(cpal::HostId::CoreAudio) {
             if let Some(device) = host.default_input_device() {
                 return Ok(device);
             }
         }
-
+    
         tracing::warn!(
             "Falling back to default host for audio device selection, this usually will not work for system audio capture on macOS"
         );
@@ -43,7 +40,7 @@ pub fn get_default_output_device() -> Result<Device, AudioRecorderError> {
                 ));
             }
         };
-
+    
         return Ok(device);
     }
 
@@ -56,7 +53,7 @@ pub fn get_default_output_device() -> Result<Device, AudioRecorderError> {
                 return Ok(device);
             }
         }
-
+    
         // Fallback to default host if WASAPI fails
         let host = cpal::default_host();
         let device = match host.default_output_device() {
@@ -68,10 +65,10 @@ pub fn get_default_output_device() -> Result<Device, AudioRecorderError> {
                 ));
             }
         };
-
+    
         Ok(device)
     }
-
+    
     #[cfg(target_os = "linux")]
     {
         // TODO: implement linux device selection (this changes due to pipewire/alsa/pulseaudio)
@@ -86,10 +83,10 @@ pub fn get_default_output_device() -> Result<Device, AudioRecorderError> {
                 ));
             }
         };
-
+    
         Ok(device)
     }
-
+    
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         let host = cpal::default_host();
@@ -102,7 +99,7 @@ pub fn get_default_output_device() -> Result<Device, AudioRecorderError> {
                 ));
             }
         };
-
+    
         Ok(device)
     }
 }

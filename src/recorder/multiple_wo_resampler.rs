@@ -53,7 +53,7 @@ impl Recorder {
         let config: cpal::StreamConfig = input_config.clone().into();
 
         // Create a delay in case the input and output devices aren't synced.
-        let latency_frames = (150.0 / 1_000.0) * config.sample_rate.0 as f32;
+        let latency_frames = (150.0 / 1_000.0) * config.sample_rate as f32;
         let latency_samples = latency_frames as usize * config.channels as usize;
 
         tracing::debug!("Latency samples: {}", latency_samples);

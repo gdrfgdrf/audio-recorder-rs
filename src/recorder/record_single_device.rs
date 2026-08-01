@@ -90,7 +90,7 @@ impl Recorder {
         };
 
         tracing::debug!("Setting up the recorder");
-        self.target_sample_rate = Some(config.sample_rate().0);
+        self.target_sample_rate = Some(config.sample_rate());
         self.channels = Some(config.channels());
         self.sample_size = Some(config.sample_format().sample_size() as u32);
         tracing::debug!("Config: {:?}", self);
