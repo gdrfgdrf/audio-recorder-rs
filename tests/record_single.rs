@@ -10,7 +10,7 @@ fn record_input_only() {
     let mut recorder = Recorder::new();
 
     tracing::info!("Starting recorder");
-    let receiver = match recorder.start(true, None, None, None) {
+    let receiver = match recorder.start(true, Some(8000), Some(1), Some(4)) {
         Ok(receiver) => receiver,
         Err(e) => {
             panic!("Failed to start recorder: {e}");
@@ -44,7 +44,7 @@ fn record_input_only() {
     let instant = std::time::Instant::now();
 
     while let Ok(d) = receiver.recv() {
-        if instant.elapsed().as_secs() > 8 {
+        if instant.elapsed().as_secs() > 3 {
             break;
         }
 

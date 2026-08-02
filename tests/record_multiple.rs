@@ -44,7 +44,7 @@ fn record_multiple_devices() {
     let instant = std::time::Instant::now();
 
     while let Ok(d) = receiver.recv() {
-        if instant.elapsed().as_secs() > 8 {
+        if instant.elapsed().as_secs() > 3 {
             break;
         }
 
