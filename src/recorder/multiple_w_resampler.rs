@@ -592,7 +592,7 @@ impl Recorder {
                     let mixed = if channels == 1 {
                         in_buf.iter()
                             .zip(out_buf.iter())
-                            .map(|(&i, &o)| i)
+                            .map(|(&i, &o)| (i + o) / 2.0_f32)
                             .collect::<Vec<_>>()
                     } else {
                         let mut interleaved = Vec::with_capacity(target_rate * 2);
