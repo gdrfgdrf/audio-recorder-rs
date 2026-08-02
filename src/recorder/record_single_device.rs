@@ -111,6 +111,7 @@ impl Recorder {
         &mut self,
         device: cpal::Device,
         is_input: bool,
+        channels: Option<u16>,
     ) -> Result<Receiver<Vec<TargetFormat>>, AudioRecorderError> {
         tracing::info!("Record single device started");
 
@@ -143,7 +144,7 @@ impl Recorder {
 
         tracing::debug!("Setting up the recorder");
         self.target_sample_rate = Some(config.sample_rate());
-        self.channels = Some(config.channels());
+        self.channels = Some(channels.unwrap_or(config.channels()));
         self.sample_size = Some(config.sample_format().sample_size() as u32);
         tracing::debug!("Config: {:?}", self);
 
