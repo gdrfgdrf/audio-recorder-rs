@@ -31,6 +31,7 @@ mod record_multiple_spawner;
 
 /// Module for recording from a single device.
 mod record_single_device;
+pub mod stream_resampler;
 
 /// Expands to the correct `self.record_multiple::<In, Out>(…)` call
 /// for every (input, output) sample-format pair.

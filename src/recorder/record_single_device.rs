@@ -8,6 +8,7 @@ use cpal::{
     traits::{DeviceTrait, StreamTrait},
 };
 use crossbeam_channel::Receiver;
+use crate::recorder::stream_resampler::StreamResampler;
 use super::{
     constants::{CLOCK_DELAY, TargetFormat},
     errors::AudioRecorderError,
@@ -32,6 +33,7 @@ macro_rules! build_input_stream_for {
         $config:expr,            // config
         $fmt:expr,               // runtime SampleFormat
         $tx:expr,                // mpsc::Sender<Vec<TargetFormat>>
+        $resampler:expr,
         $( $variant:ident => $ty:ty ),+ $(,)?   // mapping table
     ) => {{
         match $fmt {
@@ -39,14 +41,20 @@ macro_rules! build_input_stream_for {
                 cpal::SampleFormat::$variant => {
                     // Each branch has the right slice type automatically.
                     let tx_clone = $tx.clone();
+                    let mut resampler = $resampler;
                     $device.build_input_stream(
                         &($config).clone().into(),
                         move |data: &[$ty], _| {
                             // fast, idiomatic conversion
-                            let parsed: Vec<TargetFormat> =
-                                data.iter().map(|s| s.to_sample::<TargetFormat>()).collect();
-                            if let Err(e) = tx_clone.send(parsed) {
-                                tracing::error!("Failed to send data: {}", e);
+                            let converted: Vec<TargetFormat> = data
+                                .iter()
+                                .map(|s| s.to_sample::<TargetFormat>())
+                                .collect();
+                            let resampled = resampler.process(&converted);
+                            if !resampled.is_empty() {
+                                if let Err(e) = tx_clone.send(resampled) {
+                                    tracing::error!("Failed to send resampled data: {}", e);
+                                }
                             }
                         },
                         Recorder::err_fn,
@@ -72,6 +80,7 @@ macro_rules! build_output_stream_for {
         $config:expr,            // config
         $fmt:expr,               // runtime SampleFormat
         $tx:expr,                // mpsc::Sender<Vec<TargetFormat>>
+        $resampler:expr,
         $( $variant:ident => $ty:ty ),+ $(,)?   // mapping table
     ) => {{
         match $fmt {
@@ -79,14 +88,20 @@ macro_rules! build_output_stream_for {
                 cpal::SampleFormat::$variant => {
                     // Each branch has the right slice type automatically.
                     let tx_clone = $tx.clone();
+                    let mut resampler = $resampler;
                     $device.build_output_stream(
                         &($config).clone().into(),
                         move |data: &mut [$ty], _| {
                             // fast, idiomatic conversion
-                            let parsed: Vec<TargetFormat> =
-                                data.iter().map(|s| s.to_sample::<TargetFormat>()).collect();
-                            if let Err(e) = tx_clone.send(parsed) {
-                                tracing::error!("Failed to send data: {}", e);
+                            let converted: Vec<TargetFormat> = data
+                                .iter()
+                                .map(|s| s.to_sample::<TargetFormat>())
+                                .collect();
+                            let resampled = resampler.process(&converted);
+                            if !resampled.is_empty() {
+                                if let Err(e) = tx_clone.send(resampled) {
+                                    tracing::error!("Failed to send resampled data: {}", e);
+                                }
                             }
                         },
                         Recorder::err_fn,
@@ -144,10 +159,18 @@ impl Recorder {
             }
         };
 
+        let input_rate = config.sample_rate();
+        let target_rate = sample_rate.unwrap_or(input_rate);
+        let channels = channels.unwrap_or(config.channels());
+
         tracing::debug!("Setting up the recorder");
-        self.target_sample_rate = Some(sample_rate.unwrap_or(config.sample_rate()));
-        self.channels = Some(channels.unwrap_or(config.channels()));
+        self.target_sample_rate = Some(target_rate);
+        self.channels = Some(channels);
         self.sample_size = Some(sample_size.unwrap_or(config.sample_format().sample_size() as u32));
+
+        tracing::debug!("Setting up the resampler");
+        let resampler = StreamResampler::new(input_rate, target_rate, channels);
+
         tracing::debug!("Config: {:?}", self);
 
         // Run the input stream on a separate thread.
@@ -166,6 +189,7 @@ impl Recorder {
                     config,
                     config.sample_format(),
                     sync_tx,
+                    resampler,
                     I8  => i8,
                     I16 => i16,
                     I32 => i32,
@@ -190,6 +214,7 @@ impl Recorder {
                     config,
                     config.sample_format(),
                     sync_tx,
+                    resampler,
                     I8  => i8,
                     I16 => i16,
                     I32 => i32,
