@@ -498,6 +498,7 @@ impl Recorder {
             }
         };
 
+        let channels = self.channels;
         thread::spawn(move || {
             let input_stream = input_device
                 .build_input_stream(
@@ -587,12 +588,21 @@ impl Recorder {
                     consumer_in_resampled.pop_slice(&mut in_buf);
                     consumer_out_resampled.pop_slice(&mut out_buf);
 
-                    let mut interleaved = Vec::with_capacity(target_rate * 2);
-                    for (i, o) in in_buf.iter().zip(out_buf.iter()) {
-                        interleaved.push(*i);
-                        interleaved.push(*o);
-                    }
-                    if sync_tx.send(interleaved).is_err() {
+                    let channels = channels.unwrap_or(2) as usize;
+                    let mixed = if channels == 1 {
+                        in_buf.iter()
+                            .zip(out_buf.iter())
+                            .map(|(&i, &o)| (i + o) / 2.0_f32)
+                            .collect::<Vec<_>>()
+                    } else {
+                        let mut interleaved = Vec::with_capacity(target_rate * 2);
+                        for (i, o) in in_buf.iter().zip(out_buf.iter()) {
+                            interleaved.push(*i);
+                            interleaved.push(*o);
+                        }
+                        interleaved
+                    };
+                    if sync_tx.send(mixed).is_err() {
                         break;
                     }
                 }

@@ -10,7 +10,7 @@ fn record_multiple_devices() {
     let mut recorder = Recorder::new();
 
     tracing::info!("Starting recorder");
-    let receiver = match recorder.start(false, Some(8000), Some(2), Some(4)) {
+    let receiver = match recorder.start(false, Some(8000), Some(1), Some(4)) {
         Ok(receiver) => receiver,
         Err(e) => {
             panic!("Failed to start recorder: {e}");
