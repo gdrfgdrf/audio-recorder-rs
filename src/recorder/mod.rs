@@ -143,6 +143,7 @@ impl Recorder {
     pub fn start(
         &mut self,
         input_only: bool,
+        sample_rate: Option<u32>,
         channels: Option<u16>,
     ) -> Result<Receiver<Vec<TargetFormat>>, AudioRecorderError> {
         tracing::info!("Starting audio recording");
@@ -170,7 +171,7 @@ impl Recorder {
 
         if input_only {
             tracing::info!("Recording from a single device");
-            return self.record_single_device(input_device, true, channels);
+            return self.record_single_device(input_device, true, sample_rate, channels);
         }
 
         let output_device = match get_default_output_device() {

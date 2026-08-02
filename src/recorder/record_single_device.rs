@@ -111,6 +111,7 @@ impl Recorder {
         &mut self,
         device: cpal::Device,
         is_input: bool,
+        sample_rate: Option<u32>,
         channels: Option<u16>,
     ) -> Result<Receiver<Vec<TargetFormat>>, AudioRecorderError> {
         tracing::info!("Record single device started");
@@ -145,7 +146,7 @@ impl Recorder {
         tracing::debug!("Setting up the recorder");
         self.target_sample_rate = Some(config.sample_rate());
         self.channels = Some(channels.unwrap_or(config.channels()));
-        self.sample_size = Some(config.sample_format().sample_size() as u32);
+        self.sample_size = Some(sample_rate.unwrap_or(config.sample_format().sample_size() as u32));
         tracing::debug!("Config: {:?}", self);
 
         // Run the input stream on a separate thread.
