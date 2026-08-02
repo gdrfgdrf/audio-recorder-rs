@@ -3,16 +3,15 @@ use std::{
     time::Duration,
 };
 
+use super::{
+    constants::{CLOCK_DELAY, TargetFormat},
+    errors::AudioRecorderError,
+};
 use cpal::{
     Sample,
     traits::{DeviceTrait, StreamTrait},
 };
 use crossbeam_channel::Receiver;
-use crate::recorder::stream_resampler::StreamResampler;
-use super::{
-    constants::{CLOCK_DELAY, TargetFormat},
-    errors::AudioRecorderError,
-};
 
 use super::Recorder;
 
@@ -33,7 +32,6 @@ macro_rules! build_input_stream_for {
         $config:expr,            // config
         $fmt:expr,               // runtime SampleFormat
         $tx:expr,                // mpsc::Sender<Vec<TargetFormat>>
-        $resampler:expr,
         $( $variant:ident => $ty:ty ),+ $(,)?   // mapping table
     ) => {{
         match $fmt {
@@ -41,20 +39,14 @@ macro_rules! build_input_stream_for {
                 cpal::SampleFormat::$variant => {
                     // Each branch has the right slice type automatically.
                     let tx_clone = $tx.clone();
-                    let mut resampler = $resampler;
                     $device.build_input_stream(
                         &($config).clone().into(),
                         move |data: &[$ty], _| {
                             // fast, idiomatic conversion
-                            let converted: Vec<TargetFormat> = data
-                                .iter()
-                                .map(|s| s.to_sample::<TargetFormat>())
-                                .collect();
-                            let resampled = resampler.process(&converted);
-                            if !resampled.is_empty() {
-                                if let Err(e) = tx_clone.send(resampled) {
-                                    tracing::error!("Failed to send resampled data: {}", e);
-                                }
+                            let parsed: Vec<TargetFormat> =
+                                data.iter().map(|s| s.to_sample::<TargetFormat>()).collect();
+                            if let Err(e) = tx_clone.send(parsed) {
+                                tracing::error!("Failed to send data: {}", e);
                             }
                         },
                         Recorder::err_fn,
@@ -74,58 +66,10 @@ macro_rules! build_input_stream_for {
     }};
 }
 
-macro_rules! build_output_stream_for {
-    (
-        $device:expr,            // input  CPAL device
-        $config:expr,            // config
-        $fmt:expr,               // runtime SampleFormat
-        $tx:expr,                // mpsc::Sender<Vec<TargetFormat>>
-        $resampler:expr,
-        $( $variant:ident => $ty:ty ),+ $(,)?   // mapping table
-    ) => {{
-        match $fmt {
-            $(
-                cpal::SampleFormat::$variant => {
-                    // Each branch has the right slice type automatically.
-                    let tx_clone = $tx.clone();
-                    let mut resampler = $resampler;
-                    $device.build_output_stream(
-                        &($config).clone().into(),
-                        move |data: &mut [$ty], _| {
-                            // fast, idiomatic conversion
-                            let converted: Vec<TargetFormat> = data
-                                .iter()
-                                .map(|s| s.to_sample::<TargetFormat>())
-                                .collect();
-                            let resampled = resampler.process(&converted);
-                            if !resampled.is_empty() {
-                                if let Err(e) = tx_clone.send(resampled) {
-                                    tracing::error!("Failed to send resampled data: {}", e);
-                                }
-                            }
-                        },
-                        Recorder::err_fn,
-                        None,
-                    )
-                    .map_err(|e| {
-                        tracing::error!("Failed to build output stream: {}", e);
-                        "Failed to build output stream".to_string()
-                    })
-                }
-            )+
-            other => {
-                tracing::error!("Unsupported sample format: {:?}", other);
-                Err("Unsupported sample format".into())
-            }
-        }
-    }};
-}
-
 impl Recorder {
     pub fn record_single_device(
         &mut self,
         device: cpal::Device,
-        is_input: bool,
         sample_rate: Option<u32>,
         channels: Option<u16>,
         sample_size: Option<u32>
@@ -137,39 +81,18 @@ impl Recorder {
             device.name().unwrap_or(String::from("Unknown"))
         );
 
-        let config = if is_input {
-            match device.default_input_config() {
-                Ok(config) => config,
-                Err(error) => {
-                    tracing::error!("Failed to get default input config: {}", error);
-                    return Err(AudioRecorderError::DeviceError(
-                        "Failed to get default input config",
-                    ));
-                }
-            }
-        } else {
-            match device.default_output_config() {
-                Ok(config) => config,
-                Err(error) => {
-                    tracing::error!("Failed to get default output config: {}", error);
-                    return Err(AudioRecorderError::DeviceError(
-                        "Failed to get default output config",
-                    ));
-                }
+        let config = match device.default_input_config() {
+            Ok(config) => config,
+            Err(error) => {
+                tracing::error!("Failed to get default input config: {}", error);
+                return Err(AudioRecorderError::DeviceError(
+                    "Failed to get default input config",
+                ));
             }
         };
-
-        let input_rate = config.sample_rate();
-        let target_rate = sample_rate.unwrap_or(input_rate);
-        let channels = channels.unwrap_or(config.channels());
-
-        tracing::debug!("Setting up the recorder");
-        self.target_sample_rate = Some(target_rate);
-        self.channels = Some(channels);
+        self.target_sample_rate = Some(sample_rate.unwrap_or(config.sample_rate() as u32));
+        self.channels = Some(channels.unwrap_or(config.channels()));
         self.sample_size = Some(sample_size.unwrap_or(config.sample_format().sample_size() as u32));
-
-        tracing::debug!("Setting up the resampler");
-        let resampler = StreamResampler::new(input_rate, target_rate, channels);
 
         tracing::debug!("Config: {:?}", self);
 
@@ -183,55 +106,27 @@ impl Recorder {
 
         tracing::debug!("Begin recording...");
         thread::spawn(move || {
-            let stream = if is_input {
-                match build_input_stream_for!(
-                    device,
-                    config,
-                    config.sample_format(),
-                    sync_tx,
-                    resampler,
-                    I8  => i8,
-                    I16 => i16,
-                    I32 => i32,
-                    I64 => i64,
-                    U8  => u8,
-                    U16 => u16,
-                    U32 => u32,
-                    U64 => u64,
-                    F32 => f32,
-                    F64 => f64
-                ) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        tracing::error!("Failed to build input stream: {}", e);
-                        recording_signal.store(false, std::sync::atomic::Ordering::SeqCst);
-                        return Err("Failed to build input stream".to_string());
-                    }
-                }
-            } else {
-                match build_output_stream_for!(
-                    device,
-                    config,
-                    config.sample_format(),
-                    sync_tx,
-                    resampler,
-                    I8  => i8,
-                    I16 => i16,
-                    I32 => i32,
-                    I64 => i64,
-                    U8  => u8,
-                    U16 => u16,
-                    U32 => u32,
-                    U64 => u64,
-                    F32 => f32,
-                    F64 => f64
-                ) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        tracing::error!("Failed to build output stream: {}", e);
-                        recording_signal.store(false, std::sync::atomic::Ordering::SeqCst);
-                        return Err("Failed to build output stream".to_string());
-                    }
+            let stream = match build_input_stream_for!(
+                device,
+                config,
+                config.sample_format(),
+                sync_tx,
+                I8  => i8,
+                I16 => i16,
+                I32 => i32,
+                I64 => i64,
+                U8  => u8,
+                U16 => u16,
+                U32 => u32,
+                U64 => u64,
+                F32 => f32,
+                F64 => f64
+            ) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::error!("Failed to build input stream: {}", e);
+                    recording_signal.store(false, std::sync::atomic::Ordering::SeqCst);
+                    return Err("Failed to build input stream".to_string());
                 }
             };
 

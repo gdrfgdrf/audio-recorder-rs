@@ -10,7 +10,7 @@ fn record_input_only() {
     let mut recorder = Recorder::new();
 
     tracing::info!("Starting recorder");
-    let receiver = match recorder.start(true) {
+    let receiver = match recorder.start(true, None, None, None) {
         Ok(receiver) => receiver,
         Err(e) => {
             panic!("Failed to start recorder: {e}");
@@ -44,7 +44,7 @@ fn record_input_only() {
     let instant = std::time::Instant::now();
 
     while let Ok(d) = receiver.recv() {
-        if instant.elapsed().as_secs() > 2 {
+        if instant.elapsed().as_secs() > 8 {
             break;
         }
 
@@ -61,8 +61,8 @@ fn record_input_only() {
         "output.wav does not exist"
     );
 
-    // delete output.wav
-    if let Err(e) = std::fs::remove_file("output.wav") {
-        tracing::error!("Failed to delete output.wav: {}", e);
-    }
+    // // delete output.wav
+    // if let Err(e) = std::fs::remove_file("output.wav") {
+    //     tracing::error!("Failed to delete output.wav: {}", e);
+    // }
 }

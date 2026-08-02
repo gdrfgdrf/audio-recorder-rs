@@ -442,4 +442,167 @@ impl Recorder {
 
         Ok(sync_rx)
     }
+
+    pub fn with_both_resampler<T, U>(
+        &self,
+        input_device: cpal::Device,
+        output_device: cpal::Device,
+        target_rate: usize,
+        input_origin_rate: usize,
+        output_origin_rate: usize,
+    ) -> Result<Receiver<Vec<TargetFormat>>, AudioRecorderError>
+    where
+        T: CustomSample + 'static,
+        U: CustomSample + 'static,
+    {
+        tracing::info!("Recording with resampling on both input and output");
+
+        let input_config = input_device.default_input_config().map_err(|e| {
+            tracing::error!("Failed to get input config: {}", e);
+            AudioRecorderError::DeviceError("Failed to get input config")
+        })?;
+        let output_config = output_device.default_output_config().map_err(|e| {
+            tracing::error!("Failed to get output config: {}", e);
+            AudioRecorderError::DeviceError("Failed to get output config")
+        })?;
+
+        let buffer_size = RESAMPLER_CHUNK_SIZE * 2;
+
+        let ring_in_raw = HeapRb::<TargetFormat>::new(buffer_size);
+        let ring_out_raw = HeapRb::<TargetFormat>::new(buffer_size);
+        let ring_in_resampled = HeapRb::<TargetFormat>::new(buffer_size);
+        let ring_out_resampled = HeapRb::<TargetFormat>::new(buffer_size);
+
+        let (mut producer_in_raw, mut consumer_in_raw) = ring_in_raw.split();
+        let (mut producer_out_raw, mut consumer_out_raw) = ring_out_raw.split();
+        let (mut producer_in_resampled, mut consumer_in_resampled) = ring_in_resampled.split();
+        let (mut producer_out_resampled, mut consumer_out_resampled) = ring_out_resampled.split();
+
+        let (sync_tx, sync_rx) = crossbeam_channel::unbounded();
+        let recording_signal = self.recording_signal.clone();
+
+        let input_channels = input_config.channels();
+        let output_channels = output_config.channels();
+
+        let write_input_data = move |data: &[T], _: &_| {
+            let mono = Recorder::channels_to_mono(data.to_vec(), input_channels);
+            for sample in mono {
+                let _ = producer_in_raw.try_push(sample.to_sample::<TargetFormat>());
+            }
+        };
+
+        let write_output_data = move |data: &[U], _: &_| {
+            let mono = Recorder::channels_to_mono(data.to_vec(), output_channels);
+            for sample in mono {
+                let _ = producer_out_raw.try_push(sample.to_sample::<TargetFormat>());
+            }
+        };
+
+        thread::spawn(move || {
+            let input_stream = input_device
+                .build_input_stream(
+                    &input_config.into(),
+                    write_input_data,
+                    Recorder::err_fn,
+                    None,
+                )
+                .map_err(|e| {
+                    tracing::error!("Failed to build input stream: {}", e);
+                })
+                .ok();
+
+            let output_stream = output_device
+                .build_input_stream(
+                    &output_config.into(),
+                    write_output_data,
+                    Recorder::err_fn,
+                    None,
+                )
+                .map_err(|e| {
+                    tracing::error!("Failed to build output stream: {}", e);
+                })
+                .ok();
+
+            let signal_clone = recording_signal.clone();
+            thread::spawn(move || {
+                let mut resampler =
+                    FftFixedIn::<TargetFormat>::new(input_origin_rate, target_rate, 1024, 2, 1)
+                        .unwrap();
+                let mut out_buf = resampler.output_buffer_allocate(true);
+                let mut next_frames = resampler.input_frames_next();
+
+                while signal_clone.load(Ordering::SeqCst) {
+                    while consumer_in_raw.occupied_len() >= next_frames {
+                        let mut data = vec![0.0; next_frames];
+                        consumer_in_raw.pop_slice(&mut data);
+                        if resampler
+                            .process_into_buffer(&[&data], &mut out_buf, None)
+                            .is_ok()
+                        {
+                            next_frames = resampler.input_frames_next();
+                            producer_in_resampled.push_slice(&out_buf[0]);
+                        }
+                    }
+                    sleep(Duration::from_millis(RESAMPLER_SLEEP_DELAY as u64));
+                }
+            });
+
+            let signal_clone2 = recording_signal.clone();
+            thread::spawn(move || {
+                let mut resampler =
+                    FftFixedIn::<TargetFormat>::new(output_origin_rate, target_rate, 1024, 2, 1)
+                        .unwrap();
+                let mut out_buf = resampler.output_buffer_allocate(true);
+                let mut next_frames = resampler.input_frames_next();
+
+                while signal_clone2.load(Ordering::SeqCst) {
+                    while consumer_out_raw.occupied_len() >= next_frames {
+                        let mut data = vec![0.0; next_frames];
+                        consumer_out_raw.pop_slice(&mut data);
+                        if resampler
+                            .process_into_buffer(&[&data], &mut out_buf, None)
+                            .is_ok()
+                        {
+                            next_frames = resampler.input_frames_next();
+                            producer_out_resampled.push_slice(&out_buf[0]);
+                        }
+                    }
+                    sleep(Duration::from_millis(RESAMPLER_SLEEP_DELAY as u64));
+                }
+            });
+
+            if let Some(ref s) = input_stream {
+                let _ = s.play();
+            }
+            if let Some(ref s) = output_stream {
+                let _ = s.play();
+            }
+
+            while recording_signal.load(Ordering::SeqCst) {
+                let in_len = consumer_in_resampled.occupied_len();
+                let out_len = consumer_out_resampled.occupied_len();
+                if in_len >= target_rate && out_len >= target_rate {
+                    let mut in_buf = vec![TargetFormat::EQUILIBRIUM; target_rate];
+                    let mut out_buf = vec![TargetFormat::EQUILIBRIUM; target_rate];
+                    consumer_in_resampled.pop_slice(&mut in_buf);
+                    consumer_out_resampled.pop_slice(&mut out_buf);
+
+                    let mut interleaved = Vec::with_capacity(target_rate * 2);
+                    for (i, o) in in_buf.iter().zip(out_buf.iter()) {
+                        interleaved.push(*i);
+                        interleaved.push(*o);
+                    }
+                    if sync_tx.send(interleaved).is_err() {
+                        break;
+                    }
+                }
+                sleep(Duration::from_millis(RESAMPLER_SLEEP_DELAY as u64));
+            }
+
+            drop(input_stream);
+            drop(output_stream);
+        });
+
+        Ok(sync_rx)
+    }
 }

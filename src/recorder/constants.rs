@@ -8,6 +8,7 @@ pub const CLOCK_DELAY: u32 = 400;
 pub const RESAMPLER_SLEEP_DELAY: u32 = 10;
 pub const RESAMPLER_CHUNK_SIZE: usize = 44100;
 
+#[derive(Debug)]
 pub enum ResampleTargetStream {
     /// Resample the input stream to achieve the output rate
     Input,
@@ -15,6 +16,7 @@ pub enum ResampleTargetStream {
     Output,
     /// No resampling
     None,
+    Both
 }
 
 pub trait CustomSample:

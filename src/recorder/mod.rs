@@ -31,7 +31,6 @@ mod record_multiple_spawner;
 
 /// Module for recording from a single device.
 mod record_single_device;
-pub mod stream_resampler;
 
 /// Expands to the correct `self.record_multiple::<In, Out>(…)` call
 /// for every (input, output) sample-format pair.
@@ -146,7 +145,7 @@ impl Recorder {
         input_only: bool,
         sample_rate: Option<u32>,
         channels: Option<u16>,
-        sample_size: Option<u32>
+        sample_size: Option<u32>,
     ) -> Result<Receiver<Vec<TargetFormat>>, AudioRecorderError> {
         tracing::info!("Starting audio recording");
 
@@ -158,9 +157,10 @@ impl Recorder {
 
         tracing::debug!("Initializing flag for recording");
         self.recording_signal.store(true, Ordering::SeqCst);
-        self.target_sample_rate = None;
-        self.channels = None;
-        self.sample_size = None;
+
+        self.target_sample_rate = sample_rate;
+        self.channels = channels;
+        self.sample_size = sample_size;
 
         let input_device = match get_default_input_device() {
             Ok(device) => device,
@@ -173,7 +173,7 @@ impl Recorder {
 
         if input_only {
             tracing::info!("Recording from a single device");
-            return self.record_single_device(input_device, true, sample_rate, channels, sample_size);
+            return self.record_single_device(input_device, sample_rate, channels, sample_size);
         }
 
         let output_device = match get_default_output_device() {

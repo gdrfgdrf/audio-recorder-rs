@@ -19,75 +19,73 @@ impl Recorder {
     {
         tracing::debug!("Record multiple started");
 
-        tracing::debug!("Collecting input and output configs");
-        // using the same config for input and output
-        let input_config = match input_device.default_input_config() {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!("Failed to get input config: {}", e);
-                return Err(AudioRecorderError::DeviceError(
-                    "Failed to get input config",
-                ));
-            }
+        let input_config = input_device.default_input_config().map_err(|e| {
+            tracing::error!("Failed to get input config: {}", e);
+            AudioRecorderError::DeviceError("Failed to get input config")
+        })?;
+        let output_config = output_device.default_output_config().map_err(|e| {
+            tracing::error!("Failed to get output config: {}", e);
+            AudioRecorderError::DeviceError("Failed to get output config")
+        })?;
+
+        let input_sample_rate = input_config.sample_rate() as usize;
+        let output_sample_rate = output_config.sample_rate() as usize;
+        
+        if self.target_sample_rate.is_none() {
+            self.target_sample_rate = Some(input_sample_rate.min(output_sample_rate) as u32);
+        }
+        if self.channels.is_none() {
+            self.channels = Some(2);
+        }
+        if self.sample_size.is_none() {
+            self.sample_size = Some(input_config.sample_format().sample_size() as u32);
+        }
+
+        let target_rate = self.target_sample_rate.unwrap() as usize;
+        let resample_target = if target_rate == input_sample_rate && target_rate == output_sample_rate {
+            ResampleTargetStream::None
+        } else if target_rate == input_sample_rate {
+            ResampleTargetStream::Output
+        } else if target_rate == output_sample_rate {
+            ResampleTargetStream::Input
+        } else {
+            ResampleTargetStream::Both
         };
-        let output_config = match output_device.default_output_config() {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!("Failed to get output config: {}", e);
-                return Err(AudioRecorderError::DeviceError(
-                    "Failed to get output config",
-                ));
-            }
-        };
 
-        tracing::debug!("Calculating resampling target");
-        // calculate the resampling target
-        let input_sample_rate = input_config.sample_rate();
-        let output_sample_rate = output_config.sample_rate();
-
-        let (resampler_target, target_rate, origin_rate) =
-            match input_sample_rate.cmp(&output_sample_rate) {
-                std::cmp::Ordering::Less => (
-                    ResampleTargetStream::Output,
-                    input_sample_rate as usize,
-                    output_sample_rate as usize,
-                ), // resample output to achieve input rate
-                std::cmp::Ordering::Equal => (
-                    ResampleTargetStream::None,
-                    input_sample_rate as usize,
-                    output_sample_rate as usize,
-                ), // no resampling
-                std::cmp::Ordering::Greater => (
-                    ResampleTargetStream::Input,
-                    output_sample_rate as usize,
-                    input_sample_rate as usize,
-                ), // resample input to achieve output rate
-            };
-
-        tracing::debug!("Setting up the recorder");
-        self.target_sample_rate = Some(target_rate as u32);
-        self.channels = Some(2);
-        self.sample_size = Some(input_config.sample_format().sample_size() as u32);
-
+        tracing::debug!("Resample strategy: {:?}, target_rate: {}", resample_target, target_rate);
         tracing::debug!("Config: {:?}", self);
 
-        // start recording
-        match resampler_target {
+        match resample_target {
             ResampleTargetStream::None => {
                 self.without_resampler::<T, U>(input_device, output_device)
             }
-            ResampleTargetStream::Output => self.with_output_resampler::<T, U>(
-                input_device,
-                output_device,
-                target_rate,
-                origin_rate,
-            ),
-            ResampleTargetStream::Input => self.with_input_resampler::<T, U>(
-                input_device,
-                output_device,
-                target_rate,
-                origin_rate,
-            ),
+            ResampleTargetStream::Output => {
+                let origin_rate = output_sample_rate;
+                self.with_output_resampler::<T, U>(
+                    input_device,
+                    output_device,
+                    target_rate,
+                    origin_rate,
+                )
+            }
+            ResampleTargetStream::Input => {
+                let origin_rate = input_sample_rate;
+                self.with_input_resampler::<T, U>(
+                    input_device,
+                    output_device,
+                    target_rate,
+                    origin_rate,
+                )
+            }
+            ResampleTargetStream::Both => {
+                self.with_both_resampler::<T, U>(
+                    input_device,
+                    output_device,
+                    target_rate,
+                    input_sample_rate,
+                    output_sample_rate,
+                )
+            }
         }
     }
 }
